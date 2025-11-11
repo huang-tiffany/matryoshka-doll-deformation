@@ -10,12 +10,12 @@ include(libigl)
 igl_include(glfw)
 # Other modules you could enable
 #igl_include(embree)
-#igl_include(imgui)
+igl_include(imgui)
 #igl_include(opengl)
 #igl_include(stb)
 #igl_include(predicates)
 #igl_include(xml)
-#igl_include(copyleft cgal)
+igl_include(copyleft cgal)
 #igl_include(copyleft comiso)
 #igl_include(copyleft core)
 #igl_include(copyleft cork)
@@ -26,19 +26,20 @@ igl_include(glfw)
 
 # Add your project files
 file(GLOB SRC_FILES *.cpp)
-add_executable(${PROJECT_NAME} ${SRC_FILES})
+file(GLOB HDR_FILES *.h *.hpp)
+add_executable(${PROJECT_NAME} ${SRC_FILES} ${HDR_FILES})
 
 # Link igl (and the glfw module) to your project
 target_link_libraries(${PROJECT_NAME} PUBLIC 
   igl::glfw
   ## Other modules you could link to
   # igl::embree
-  # igl::imgui
+  igl::imgui
   # igl::opengl
   # igl::stb
   # igl::predicates
   # igl::xml
-  # igl_copyleft::cgal
+  igl_copyleft::cgal
   # igl_copyleft::comiso
   # igl_copyleft::core
   # igl_copyleft::cork
@@ -47,3 +48,8 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
   # igl_restricted::mosek
   # igl_restricted::triangle
   )
+
+# Add include path for manually downloaded header
+target_include_directories(${PROJECT_NAME} PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/external
+)
