@@ -60,7 +60,9 @@ int main(int argc, char *argv[])
         if (success) {
             V_shell = V;
             F_shell = F;
+            viewer.data_list[0].clear();
             viewer.data_list[0].set_mesh(V,F);
+            viewer.data_list[1].clear();
             viewer.data_list[1].set_mesh(V,F);
             viewer.data_list[0].show_faces = false;
             mesh_resized();
