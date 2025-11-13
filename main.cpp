@@ -51,7 +51,16 @@ int main(int argc, char *argv[])
 
         viewer.data_list[1].set_vertices(V_nested);
 
-        if(meshes_intersect(V_nested, F, V_outer_inner_shell, F)) {
+        // Check if nested mesh intersects with the outer shell surface
+        bool intersects_outer = meshes_intersect(V_nested, F, V_outer, F);
+
+        // Check if nested mesh intersects with the inner shell surface
+        bool intersects_inner = meshes_intersect(V_nested, F, V_outer_inner_shell, F);
+
+        // The nested mesh should NOT intersect with outer surface
+        // and SHOULD be completely inside (not intersecting inner surface either)
+        // If it intersects either surface, it's in the shell wall - turn RED
+        if(intersects_outer || intersects_inner) {
             viewer.data_list[1].set_colors(Eigen::RowVector3d(1.0, 0.0, 0.0));
         } else {
             viewer.data_list[1].set_colors(Eigen::RowVector3d(0.0, 1.0, 0.0));
