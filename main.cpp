@@ -24,6 +24,10 @@ int main(int argc, char *argv[])
     float shell_thickness = 0.01f;
     int n_nests = 1;
     int mesh_selection = 0;
+    // inner mesh
+    float translate_x = 0.0f;
+    float translate_y = 0.0f;
+    float translate_z = 0.0f;
 
     igl::opengl::glfw::Viewer viewer;
 
@@ -36,10 +40,14 @@ int main(int argc, char *argv[])
         while(viewer.erase_mesh(viewer.selected_data_index)){};
         viewer.data().clear();
     };
-
+    //update mesh_resized by add translation
     auto mesh_resized = [&]() {
         if(V.size() == 0) return;
         V_nested = resize_mesh(V, slider_value);
+
+        // Apply translation to inner mesh
+        Eigen::RowVector3d translation(translate_x, translate_y, translate_z);
+        V_nested = V_nested.rowwise() + translation;
 
         viewer.data_list[1].set_vertices(V_nested);
 
@@ -92,6 +100,7 @@ int main(int argc, char *argv[])
         }
 
         if (success) {
+            translate_x = translate_y = translate_z = 0.0f;  // Reset translations
             stage_1();
         } else {
             std::cerr << "Failed to load: " << filename << std::endl;
@@ -135,6 +144,37 @@ int main(int argc, char *argv[])
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
+
+        // Translation controls for inner mesh
+        ImGui::Text("Translate Inner Mesh");
+
+        bool translation_changed = false;
+
+        if (ImGui::SliderFloat("Translate X", &translate_x, -1.0f, 1.0f)) {
+            translation_changed = true;
+        }
+
+        if (ImGui::SliderFloat("Translate Y", &translate_y, -1.0f, 1.0f)) {
+            translation_changed = true;
+        }
+
+        if (ImGui::SliderFloat("Translate Z", &translate_z, -1.0f, 1.0f)) {
+            translation_changed = true;
+        }
+
+        if (translation_changed) {
+            mesh_resized();
+        }
+
+        if (ImGui::Button("Reset Translation", ImVec2(-1, 0))) {
+            translate_x = translate_y = translate_z = 0.0f;
+            mesh_resized();
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
 
         if (ImGui::Button("Generate dolls...", ImVec2(-1, 0))) {
             if(V.size() == 0) return;
