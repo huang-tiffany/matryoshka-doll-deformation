@@ -134,7 +134,48 @@ int main(int argc, char *argv[])
 
     stage_1();
 
+    auto mesh_split = [&]() {
+        Eigen::MatrixXd top_vertices;
+        Eigen::MatrixXi top_faces;
+        Eigen::VectorXi top_indices;
+
+        Eigen::MatrixXd bottom_vertices;
+        Eigen::MatrixXi bottom_faces;
+        Eigen::VectorXi bottom_indices;
+
+        top_vertices.resize(0, 3);
+        top_faces.resize(0, 3);
+        top_indices.resize(0, 3);
+
+        bottom_vertices.resize(0, 3);
+        bottom_faces.resize(0, 3);
+        bottom_indices.resize(0, 3);
+
+
+        bool success = split_mesh(V, F, top_vertices, top_faces, top_indices, bottom_vertices, bottom_faces, bottom_indices, cutting_plane_y_coord);
+
+        Eigen::RowVector3d translationUp(0, 0.05, 0);
+        Eigen::RowVector3d translationDown(0, -0.05, 0);
+
+        top_vertices = top_vertices.rowwise() + translationUp;
+        bottom_vertices = bottom_vertices.rowwise() + translationDown;
+
+        clear_all_meshes();
+        viewer.append_mesh();
+        viewer.append_mesh();
+
+        viewer.data_list[0].set_mesh(top_vertices, top_faces);
+        viewer.data_list[1].set_mesh(bottom_vertices, bottom_faces);
+
+        viewer.data_list[0].show_faces = true;
+        viewer.data_list[0].show_lines = true;
+
+        viewer.data_list[1].show_faces = true;
+        viewer.data_list[1].show_lines = true;
+    };
+
     auto stage_2 = [&]() {
+        mesh_split();
     };
 
 
@@ -234,7 +275,7 @@ int main(int argc, char *argv[])
 
         if (ImGui::Button("Generate dolls...", ImVec2(-1, 0))) {
             if(V.size() == 0) return;
-            menu.callback_draw_viewer_menu = ui_2;
+            // menu.callback_draw_viewer_menu = ui_2;
             stage_2();
         }
     };
