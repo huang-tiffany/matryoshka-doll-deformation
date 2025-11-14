@@ -29,6 +29,12 @@ int main(int argc, char *argv[])
     float translate_y = 0.0f;
     float translate_z = 0.0f;
 
+    float cutting_plane_y_coord = 0.5f;
+    Eigen::MatrixXd V_plane;
+    Eigen::MatrixXi F_plane;
+    int plane_mesh_id = -1;
+    double plane_size = 2.0;
+
     igl::opengl::glfw::Viewer viewer;
 
     igl::opengl::glfw::imgui::ImGuiPlugin plugin;
@@ -39,6 +45,9 @@ int main(int argc, char *argv[])
     auto clear_all_meshes = [&]() {
         while(viewer.erase_mesh(viewer.selected_data_index)){};
         viewer.data().clear();
+
+        plane_mesh_id = -1;
+        cutting_plane_y_coord = 0.5f;
     };
     //update mesh_resized by add translation
     auto mesh_resized = [&]() {
@@ -80,8 +89,40 @@ int main(int argc, char *argv[])
         mesh_resized();
     };
 
+    auto update_plane = [&]() {
+        Eigen::RowVector3d p0(0.0, cutting_plane_y_coord, 0.0);
+        Eigen::RowVector3d n(0.0, 1.0, 0.0);
+
+        // Tangent vectors
+        Eigen::RowVector3d u(1.0, 0.0, 0.0);
+        Eigen::RowVector3d v(0.0, 0.0, 1.0);
+
+        // Plane vertices
+        V_plane.resize(4,3);
+        V_plane.row(0) = p0 + plane_size*u + plane_size*v;
+        V_plane.row(1) = p0 - plane_size*u + plane_size*v;
+        V_plane.row(2) = p0 - plane_size*u - plane_size*v;
+        V_plane.row(3) = p0 + plane_size*u - plane_size*v;
+
+        // Plane faces
+        F_plane.resize(2,3);
+        F_plane << 0,1,2,
+            0,2,3;
+
+        if(plane_mesh_id == -1){
+            viewer.append_mesh();
+            plane_mesh_id = viewer.data_list.size()-1;
+            viewer.data_list[plane_mesh_id].set_colors(Eigen::RowVector3d(0.5,0.5,1.0));
+            viewer.data_list[plane_mesh_id].show_faces = true;
+            viewer.data_list[plane_mesh_id].show_lines = true;
+        }
+
+        viewer.data_list[plane_mesh_id].set_mesh(V_plane, F_plane);
+    };
+
     auto stage_1 = [&]() {
         clear_all_meshes();
+
         viewer.append_mesh();
         viewer.append_mesh();
         viewer.data_list[0].set_mesh(V, F);
@@ -93,9 +134,50 @@ int main(int argc, char *argv[])
 
     stage_1();
 
-    auto stage_2 = [&]() {
+    auto mesh_split = [&]() {
+        Eigen::MatrixXd top_vertices;
+        Eigen::MatrixXi top_faces;
+        Eigen::VectorXi top_indices;
+
+        Eigen::MatrixXd bottom_vertices;
+        Eigen::MatrixXi bottom_faces;
+        Eigen::VectorXi bottom_indices;
+
+        top_vertices.resize(0, 3);
+        top_faces.resize(0, 3);
+        top_indices.resize(0, 3);
+
+        bottom_vertices.resize(0, 3);
+        bottom_faces.resize(0, 3);
+        bottom_indices.resize(0, 3);
+
+
+        bool success = split_mesh(V, F, top_vertices, top_faces, top_indices, bottom_vertices, bottom_faces, bottom_indices, cutting_plane_y_coord);
+
+        Eigen::RowVector3d translationUp(0, 0.05, 0);
+        Eigen::RowVector3d translationDown(0, -0.05, 0);
+
+        top_vertices = top_vertices.rowwise() + translationUp;
+        bottom_vertices = bottom_vertices.rowwise() + translationDown;
+
         clear_all_meshes();
+        viewer.append_mesh();
+        viewer.append_mesh();
+
+        viewer.data_list[0].set_mesh(top_vertices, top_faces);
+        viewer.data_list[1].set_mesh(bottom_vertices, bottom_faces);
+
+        viewer.data_list[0].show_faces = true;
+        viewer.data_list[0].show_lines = true;
+
+        viewer.data_list[1].show_faces = true;
+        viewer.data_list[1].show_lines = true;
     };
+
+    auto stage_2 = [&]() {
+        mesh_split();
+    };
+
 
     auto load_mesh = [&](const std::string& filename) {
         bool success = false;
@@ -114,6 +196,8 @@ int main(int argc, char *argv[])
         } else {
             std::cerr << "Failed to load: " << filename << std::endl;
         }
+
+        update_plane();
 
         return success;
     };
@@ -148,6 +232,10 @@ int main(int argc, char *argv[])
 
         if(ImGui::SliderInt("Number of Nests", &n_nests, 1, 10)) {
 
+        }
+
+        if(ImGui::SliderFloat("Cutting Plane Y Translation", &cutting_plane_y_coord, -1, 1)) {
+            update_plane();
         }
 
         ImGui::Spacing();
@@ -187,7 +275,7 @@ int main(int argc, char *argv[])
 
         if (ImGui::Button("Generate dolls...", ImVec2(-1, 0))) {
             if(V.size() == 0) return;
-            menu.callback_draw_viewer_menu = ui_2;
+            // menu.callback_draw_viewer_menu = ui_2;
             stage_2();
         }
     };
