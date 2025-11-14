@@ -15,4 +15,6 @@ Eigen::MatrixXd offset_along_normals(const Eigen::MatrixXd &V, const Eigen::Matr
 
 std::pair<Eigen::MatrixXd, Eigen::MatrixXi> create_shell(const Eigen::MatrixXd &V, const Eigen::MatrixXi &F, double offset);
 
+bool split_mesh(const Eigen::MatrixXd &V, const Eigen::MatrixXi &F, double y_coord);
+
 #endif // MANIP_H
