@@ -29,6 +29,10 @@ int main(int argc, char *argv[])
     float translate_y = 0.0f;
     float translate_z = 0.0f;
 
+    const int grid_size = 75;
+    const int time_steps = 200;
+    const double isolevel = 0;
+
     float cutting_plane_y_coord = 0.5f;
     Eigen::MatrixXd V_plane;
     Eigen::MatrixXi F_plane;
@@ -222,6 +226,65 @@ int main(int argc, char *argv[])
         }
     };
 
+    auto visualize_swept_volume = [&]() {
+        if(V.size() == 0) return;
+
+        Eigen::MatrixXd SV_top, SV_bottom;
+        Eigen::MatrixXi SF_top, SF_bottom;
+
+        const auto & transform_top = [](const double t)->Eigen::Affine3d
+        {
+            Eigen::Affine3d T = Eigen::Affine3d::Identity();
+            T.translate(Eigen::Vector3d(-0.5,0,0));
+            T.rotate(Eigen::AngleAxisd(t*0.5*igl::PI,Eigen::Vector3d(0,0,1)));
+            T.translate(Eigen::Vector3d(0.5,0,0));
+            return T;
+        };
+
+        const auto & transform_bottom = [](const double t)->Eigen::Affine3d
+        {
+            Eigen::Affine3d T = Eigen::Affine3d::Identity();
+            T.translate(Eigen::Vector3d(0.5,0,0));
+            T.rotate(Eigen::AngleAxisd(t*0.5*igl::PI,Eigen::Vector3d(0,0,1)));
+            T.translate(Eigen::Vector3d(-0.5,0,0));
+            return T;
+        };
+
+
+        if (viewer.data_list.size() < 4) {
+            return;
+        }
+
+        igl::swept_volume(
+            viewer.data_list[0].V,viewer.data_list[0].F,transform_top,time_steps,grid_size,isolevel,SV_top,SF_top);
+
+        igl::swept_volume(
+            viewer.data_list[2].V,viewer.data_list[2].F,transform_bottom,time_steps,grid_size,isolevel,SV_bottom,SF_bottom);
+
+
+        // clear_all_meshes();
+
+        Eigen::RowVector3d translationUp(0, 0.5, 0);
+        Eigen::RowVector3d translationDown(0, -0.5, 0);
+
+        SV_top = SV_top.rowwise() + translationUp;
+        SV_bottom = SV_bottom.rowwise() + translationDown;
+
+        viewer.append_mesh();
+        viewer.data_list[viewer.data_list.size() - 1].set_mesh(SV_top, SF_top);
+        viewer.data_list[viewer.data_list.size() - 1].show_faces = true;
+        viewer.data_list[viewer.data_list.size() - 1].show_lines = true;
+        viewer.data_list[viewer.data_list.size() - 1].set_colors(Eigen::RowVector3d(0.5, 0.8, 0.8));
+
+        viewer.append_mesh();
+        viewer.data_list[viewer.data_list.size() - 1].set_mesh(SV_bottom, SF_bottom);
+        viewer.data_list[viewer.data_list.size() - 1].show_faces = true;
+        viewer.data_list[viewer.data_list.size() - 1].show_lines = true;
+        viewer.data_list[viewer.data_list.size() - 1].set_colors(Eigen::RowVector3d(0.5, 0.8, 0.8));
+
+
+    };
+
     auto mesh_split = [&]() {
         Eigen::MatrixXd top_vertices;
         Eigen::MatrixXi top_faces;
@@ -363,6 +426,11 @@ int main(int argc, char *argv[])
         if (ImGui::Button("Visualize Shell Split", ImVec2(-1, 0))) {
             if(V.size() == 0) return;
             visualize_shell_split();
+        }
+
+        if (ImGui::Button("Visualize Swept Volume", ImVec2(-1, 0))) {
+            if(V.size() == 0) return;
+            visualize_swept_volume();
         }
 
         if (ImGui::Button("Generate dolls...", ImVec2(-1, 0))) {
