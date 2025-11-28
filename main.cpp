@@ -6,12 +6,15 @@
 #include <igl/readPLY.h>
 #include <imgui.h>
 #include "portable-file-dialogs.h"
+#include <igl/kelvinlets.h>
+#include <igl/unproject.h>
+#include <igl/unproject_onto_mesh.h>
 #include <iostream>
 #include "manip.h"
 
 int main(int argc, char *argv[])
 {
-    Eigen::MatrixXd V;
+    Eigen::MatrixXd V, V1;
     Eigen::MatrixXi F;
 
     Eigen::MatrixXd V_outer, V_outer_inner_shell, V_nested;
@@ -32,6 +35,15 @@ int main(int argc, char *argv[])
     const int grid_size = 75;
     const int time_steps = 200;
     const double isolevel = 0;
+
+    Eigen::Vector3d posStart(0, 0, 0);
+    Eigen::Vector3d posEnd;
+    auto brush_strength = 1.;
+    decltype(V) result;
+
+    auto brushRadius = .1;
+    auto brushType = igl::BrushType::GRAB;
+    auto scale = .05;
 
     float cutting_plane_y_coord = 0.5f;
     Eigen::MatrixXd V_plane;
@@ -344,6 +356,11 @@ int main(int argc, char *argv[])
         if (success) {
             translate_x = translate_y = translate_z = 0.0f;  // Reset translations
             stage_1();
+
+            auto min_point = V.colwise().minCoeff();
+            auto max_point = V.colwise().maxCoeff();
+            // to multiply brush force proportional to size of mesh
+            brush_strength = (max_point - min_point).norm() * 2;
         } else {
             std::cerr << "Failed to load: " << filename << std::endl;
         }
@@ -457,6 +474,90 @@ int main(int argc, char *argv[])
             menu.callback_draw_viewer_menu = ui_1;
             stage_1();
         }
+    };
+
+    viewer.callback_mouse_down =
+        [&](igl::opengl::glfw::Viewer& viewer, int, int) -> bool {
+        Eigen::Vector3f bc;
+        int fid;
+        auto x = viewer.current_mouse_x;
+        auto y =
+            viewer.core().viewport(3) - static_cast<float>(viewer.current_mouse_y);
+        if (igl::unproject_onto_mesh(Eigen::Vector2f(x, y),
+                                     viewer.core().view,
+                                     viewer.core().proj,
+                                     viewer.core().viewport,
+                                     V,
+                                     F,
+                                     fid,
+                                     bc)) {
+            posStart = igl::unproject(Eigen::Vector3f(x, y, viewer.down_mouse_z),
+                                      viewer.core().view,
+                                      viewer.core().proj,
+                                      viewer.core().viewport)
+                           .template cast<double>();
+            return true;
+        }
+        return false;
+    };
+
+    viewer.callback_mouse_move =
+        [&](igl::opengl::glfw::Viewer& viewer, int, int) -> bool {
+        if (!posStart.isZero() && !posStart.hasNaN()) {
+            posEnd = igl::unproject(
+                         Eigen::Vector3f(viewer.current_mouse_x,
+                                         viewer.core().viewport[3] -
+                                             static_cast<float>(viewer.current_mouse_y),
+                                         viewer.down_mouse_z),
+                         viewer.core().view,
+                         viewer.core().proj,
+                         viewer.core().viewport)
+                         .template cast<double>();
+
+            // exaggerate the force by a little bit
+            Eigen::Vector3d forceVec = (posEnd - posStart) * brush_strength;
+
+            int scaleFactor = forceVec.norm();
+            if (posEnd.x() < posStart.x()) {
+                // probably not the best way to determine direction.
+                scaleFactor = -scaleFactor;
+            }
+            Eigen::Matrix3d mat;
+            mat.setZero();
+
+            igl::kelvinlets(
+                V,
+                posStart,
+                forceVec,
+                mat,
+                igl::KelvinletParams<double>(brushRadius, scale, brushType),
+                result);
+
+
+            viewer.data_list[0].set_vertices(result);
+
+            return true;
+        }
+        return false;
+    };
+
+    viewer.callback_mouse_up =
+        [&](igl::opengl::glfw::Viewer& viewer, int, int) -> bool {
+        if (!posStart.isZero()) {
+            V = result;
+
+            clear_all_meshes();
+            viewer.append_mesh();
+
+            viewer.data_list[0].set_mesh(V, F);
+            viewer.data_list[0].show_faces = true;
+            viewer.data_list[0].show_lines = true;
+            viewer.data_list[0].set_colors(Eigen::RowVector3d(0.8, 0.8, 0.9));
+
+            posStart.setZero();
+            return true;
+        }
+        return false;
     };
 
 
