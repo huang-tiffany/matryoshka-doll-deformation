@@ -82,10 +82,13 @@ int main(int argc, char *argv[])
         V_outer = V;
         V_outer_inner_shell = offset_along_normals(V_outer, F, -shell_thickness);
 
-        viewer.data_list[0].set_vertices(V_outer);
-        viewer.data_list[0].show_faces = false;
-        viewer.data_list[2].set_vertices(V_outer_inner_shell);
-        viewer.data_list[2].show_faces = false;
+        // Only update if we're in stage 1 (with 3 meshes)
+        if(viewer.data_list.size() >= 3) {
+            viewer.data_list[0].set_vertices(V_outer);
+            viewer.data_list[0].show_faces = false;
+            viewer.data_list[2].set_vertices(V_outer_inner_shell);
+            viewer.data_list[2].show_faces = false;
+        }
         mesh_resized();
     };
 
@@ -133,6 +136,91 @@ int main(int argc, char *argv[])
     };
 
     stage_1();
+
+    auto visualize_shell_split = [&]() {
+        if(V.size() == 0) return;
+
+        // Split outer shell surface (open cut)
+        Eigen::MatrixXd outer_top_V, outer_bottom_V;
+        Eigen::MatrixXi outer_top_F, outer_bottom_F;
+
+        bool outer_success = split_mesh_open(V_outer, F, outer_top_V, outer_top_F,
+                                             outer_bottom_V, outer_bottom_F, cutting_plane_y_coord);
+
+        // Flip normals for inner shell surface (swap columns 1 and 2 of face matrix)
+        Eigen::MatrixXi F_inner_flipped = F;
+        F_inner_flipped.col(1).swap(F_inner_flipped.col(2));
+
+        // Split inner shell surface with flipped normals (open cut)
+        Eigen::MatrixXd inner_shell_top_V, inner_shell_bottom_V;
+        Eigen::MatrixXi inner_shell_top_F, inner_shell_bottom_F;
+
+        bool inner_success = split_mesh_open(V_outer_inner_shell, F_inner_flipped,
+                                             inner_shell_top_V, inner_shell_top_F,
+                                             inner_shell_bottom_V, inner_shell_bottom_F, cutting_plane_y_coord);
+
+        if(!outer_success || !inner_success) {
+            std::cerr << "Failed to split shell meshes" << std::endl;
+            return;
+        }
+
+        // Apply translations to separate the halves
+        Eigen::RowVector3d translationUp(0, 0.15, 0);
+        Eigen::RowVector3d translationDown(0, -0.15, 0);
+
+        outer_top_V = outer_top_V.rowwise() + translationUp;
+        inner_shell_top_V = inner_shell_top_V.rowwise() + translationUp;
+        outer_bottom_V = outer_bottom_V.rowwise() + translationDown;
+        inner_shell_bottom_V = inner_shell_bottom_V.rowwise() + translationDown;
+
+        clear_all_meshes();
+
+        // Add top half of shell (outer surface)
+        viewer.append_mesh();
+        viewer.data_list[0].set_mesh(outer_top_V, outer_top_F);
+        viewer.data_list[0].show_faces = true;
+        viewer.data_list[0].show_lines = true;
+        viewer.data_list[0].set_colors(Eigen::RowVector3d(0.8, 0.8, 0.9));
+
+        // Add top half of shell (inner surface - flipped normals)
+        viewer.append_mesh();
+        viewer.data_list[1].set_mesh(inner_shell_top_V, inner_shell_top_F);
+        viewer.data_list[1].show_faces = true;
+        viewer.data_list[1].show_lines = true;
+        viewer.data_list[1].set_colors(Eigen::RowVector3d(0.9, 0.8, 0.8));
+
+        // Add bottom half of shell (outer surface)
+        viewer.append_mesh();
+        viewer.data_list[2].set_mesh(outer_bottom_V, outer_bottom_F);
+        viewer.data_list[2].show_faces = true;
+        viewer.data_list[2].show_lines = true;
+        viewer.data_list[2].set_colors(Eigen::RowVector3d(0.8, 0.8, 0.9));
+
+        // Add bottom half of shell (inner surface - flipped normals)
+        viewer.append_mesh();
+        viewer.data_list[3].set_mesh(inner_shell_bottom_V, inner_shell_bottom_F);
+        viewer.data_list[3].show_faces = true;
+        viewer.data_list[3].show_lines = true;
+        viewer.data_list[3].set_colors(Eigen::RowVector3d(0.9, 0.8, 0.8));
+
+        // Add the nested doll mesh (V_nested) - keep it whole and centered
+        if(V_nested.size() > 0) {
+            viewer.append_mesh();
+            viewer.data_list[4].set_mesh(V_nested, F);
+            viewer.data_list[4].show_faces = true;
+            viewer.data_list[4].show_lines = true;
+
+            // Check if nested mesh intersects with shell
+            bool intersects_outer = meshes_intersect(V_nested, F, V_outer, F);
+            bool intersects_inner = meshes_intersect(V_nested, F, V_outer_inner_shell, F);
+
+            if(intersects_outer || intersects_inner) {
+                viewer.data_list[4].set_colors(Eigen::RowVector3d(1.0, 0.0, 0.0));
+            } else {
+                viewer.data_list[4].set_colors(Eigen::RowVector3d(0.0, 1.0, 0.0));
+            }
+        }
+    };
 
     auto mesh_split = [&]() {
         Eigen::MatrixXd top_vertices;
@@ -272,6 +360,10 @@ int main(int argc, char *argv[])
         ImGui::Separator();
         ImGui::Spacing();
 
+        if (ImGui::Button("Visualize Shell Split", ImVec2(-1, 0))) {
+            if(V.size() == 0) return;
+            visualize_shell_split();
+        }
 
         if (ImGui::Button("Generate dolls...", ImVec2(-1, 0))) {
             if(V.size() == 0) return;
