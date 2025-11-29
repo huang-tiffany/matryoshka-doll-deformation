@@ -40,6 +40,8 @@ int main(int argc, char *argv[])
     Eigen::Vector3d posEnd;
     auto brush_strength = 1.;
     decltype(V) result;
+    Eigen::Matrix3d mat;
+    mat.setZero();
 
     auto brushRadius = .1;
     auto brushType = igl::BrushType::GRAB;
@@ -361,11 +363,10 @@ int main(int argc, char *argv[])
             auto max_point = V.colwise().maxCoeff();
             // to multiply brush force proportional to size of mesh
             brush_strength = (max_point - min_point).norm() * 2;
+            update_plane();
         } else {
             std::cerr << "Failed to load: " << filename << std::endl;
         }
-
-        update_plane();
 
         return success;
     };
@@ -483,6 +484,8 @@ int main(int argc, char *argv[])
         auto x = viewer.current_mouse_x;
         auto y =
             viewer.core().viewport(3) - static_cast<float>(viewer.current_mouse_y);
+
+        std::cout << "down" << std::endl;
         if (igl::unproject_onto_mesh(Eigen::Vector2f(x, y),
                                      viewer.core().view,
                                      viewer.core().proj,
@@ -501,9 +504,54 @@ int main(int argc, char *argv[])
         return false;
     };
 
-    viewer.callback_mouse_move =
+    // viewer.callback_mouse_move =
+    //     [&](igl::opengl::glfw::Viewer& viewer, int, int) -> bool {
+    //     if (!posStart.isZero() && !posStart.hasNaN()) {
+    //         Eigen::Vector3d oldPosEnd(posEnd.x(), posEnd.y(), posEnd.z());
+
+    //         posEnd = igl::unproject(
+    //                      Eigen::Vector3f(viewer.current_mouse_x,
+    //                                      viewer.core().viewport[3] -
+    //                                          static_cast<float>(viewer.current_mouse_y),
+    //                                      viewer.down_mouse_z),
+    //                      viewer.core().view,
+    //                      viewer.core().proj,
+    //                      viewer.core().viewport)
+    //                      .template cast<double>();
+
+    //         std::cout << "move" << std::endl;
+
+    //         // exaggerate the force by a little bit
+    //         Eigen::Vector3d forceVec = (posEnd - posStart) * brush_strength;
+
+    //         int scaleFactor = forceVec.norm();
+    //         if (posEnd.x() < posStart.x()) {
+    //             // probably not the best way to determine direction.
+    //             scaleFactor = -scaleFactor;
+    //         }
+
+    //         igl::kelvinlets(
+    //             V,
+    //             posStart,
+    //             forceVec,
+    //             mat,
+    //             igl::KelvinletParams<double>(brushRadius, scale, brushType),
+    //             result);
+
+
+    //         // viewer.data_list[0].set_vertices(result);
+
+
+    //         return true;
+    //     }
+    //     return false;
+    // };
+
+    viewer.callback_mouse_up =
         [&](igl::opengl::glfw::Viewer& viewer, int, int) -> bool {
         if (!posStart.isZero() && !posStart.hasNaN()) {
+            Eigen::Vector3d oldPosEnd(posEnd.x(), posEnd.y(), posEnd.z());
+
             posEnd = igl::unproject(
                          Eigen::Vector3f(viewer.current_mouse_x,
                                          viewer.core().viewport[3] -
@@ -514,6 +562,8 @@ int main(int argc, char *argv[])
                          viewer.core().viewport)
                          .template cast<double>();
 
+            std::cout << "up start" << std::endl;
+
             // exaggerate the force by a little bit
             Eigen::Vector3d forceVec = (posEnd - posStart) * brush_strength;
 
@@ -522,8 +572,6 @@ int main(int argc, char *argv[])
                 // probably not the best way to determine direction.
                 scaleFactor = -scaleFactor;
             }
-            Eigen::Matrix3d mat;
-            mat.setZero();
 
             igl::kelvinlets(
                 V,
@@ -534,29 +582,34 @@ int main(int argc, char *argv[])
                 result);
 
 
-            viewer.data_list[0].set_vertices(result);
-
-            return true;
-        }
-        return false;
-    };
-
-    viewer.callback_mouse_up =
-        [&](igl::opengl::glfw::Viewer& viewer, int, int) -> bool {
-        if (!posStart.isZero()) {
+            // viewer.data_list[0].set_vertices(result);
+            viewer.data_list[1].set_vertices(result);
             V = result;
-
-            clear_all_meshes();
-            viewer.append_mesh();
-
-            viewer.data_list[0].set_mesh(V, F);
-            viewer.data_list[0].show_faces = true;
-            viewer.data_list[0].show_lines = true;
-            viewer.data_list[0].set_colors(Eigen::RowVector3d(0.8, 0.8, 0.9));
-
             posStart.setZero();
+
+            std::cout << "up end" << std::endl;
+
+
             return true;
         }
+
+        // if (!posStart.isZero()) {
+
+
+
+        //      std::cout << "up" << std::endl;
+
+        //     // clear_all_meshes();
+        //     // viewer.append_mesh();
+
+        //     // viewer.data_list[0].set_mesh(V, F);
+        //     // viewer.data_list[0].show_faces = true;
+        //     // viewer.data_list[0].show_lines = true;
+        //     // viewer.data_list[1].set_colors(Eigen::RowVector3d(0.8, 0.8, 0.9));
+
+        //     posStart.setZero();
+        //     return true;
+        // }
         return false;
     };
 
