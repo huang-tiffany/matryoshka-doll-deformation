@@ -24,7 +24,7 @@ int main(int argc, char *argv[])
 
 
     float slider_value = 1.f;
-    float shell_thickness = 0.01f;
+    float shell_thickness = 0.001f;
     int n_nests = 1;
     int mesh_selection = 0;
     // inner mesh
@@ -69,8 +69,8 @@ int main(int argc, char *argv[])
     };
     //update mesh_resized by add translation
     auto mesh_resized = [&]() {
-        if(V.size() == 0) return;
-        V_nested = resize_mesh(V, slider_value);
+        if(V1.size() == 0) return;
+        V_nested = resize_mesh(V1, slider_value);
 
         // Apply translation to inner mesh
         Eigen::RowVector3d translation(translate_x, translate_y, translate_z);
@@ -359,8 +359,9 @@ int main(int argc, char *argv[])
             translate_x = translate_y = translate_z = 0.0f;  // Reset translations
             stage_1();
 
-            auto min_point = V.colwise().minCoeff();
-            auto max_point = V.colwise().maxCoeff();
+            V1 = V;
+            auto min_point = V1.colwise().minCoeff();
+            auto max_point = V1.colwise().maxCoeff();
             // to multiply brush force proportional to size of mesh
             brush_strength = (max_point - min_point).norm() * 2;
             update_plane();
@@ -395,7 +396,7 @@ int main(int argc, char *argv[])
             mesh_resized();
         }
 
-        if (ImGui::SliderFloat("Shell Thickness", &shell_thickness, 0.01f, 0.1f)) {
+        if (ImGui::SliderFloat("Shell Thickness", &shell_thickness, 0.001f, 0.1f)) {
             shell_changed();
         }
 
@@ -485,12 +486,16 @@ int main(int argc, char *argv[])
         auto y =
             viewer.core().viewport(3) - static_cast<float>(viewer.current_mouse_y);
 
-        std::cout << "down" << std::endl;
+\
+        auto V_temp = V1;
+        if (V_nested.size() != 0) {
+            V_temp = V_nested;
+        }
         if (igl::unproject_onto_mesh(Eigen::Vector2f(x, y),
                                      viewer.core().view,
                                      viewer.core().proj,
                                      viewer.core().viewport,
-                                     V,
+                                     V_temp,
                                      F,
                                      fid,
                                      bc)) {
@@ -562,7 +567,6 @@ int main(int argc, char *argv[])
                          viewer.core().viewport)
                          .template cast<double>();
 
-            std::cout << "up start" << std::endl;
 
             // exaggerate the force by a little bit
             Eigen::Vector3d forceVec = (posEnd - posStart) * brush_strength;
@@ -574,7 +578,7 @@ int main(int argc, char *argv[])
             }
 
             igl::kelvinlets(
-                V,
+                V1,
                 posStart,
                 forceVec,
                 mat,
@@ -584,11 +588,10 @@ int main(int argc, char *argv[])
 
             // viewer.data_list[0].set_vertices(result);
             viewer.data_list[1].set_vertices(result);
-            V = result;
+            V1 = result;
             posStart.setZero();
 
-            std::cout << "up end" << std::endl;
-
+            mesh_resized();
 
             return true;
         }
