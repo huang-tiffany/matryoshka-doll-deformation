@@ -34,17 +34,6 @@ std::pair<Eigen::MatrixXd, Eigen::MatrixXi> create_shell(const Eigen::MatrixXd &
     return std::make_pair(V_shell, F_shell);
 }
 
-bool split_mesh(const Eigen::MatrixXd &V, const Eigen::MatrixXi &F, Eigen::MatrixXd &top_vertices, Eigen::MatrixXi &top_faces, Eigen::VectorXi &top_indices, Eigen::MatrixXd &bottom_vertices, Eigen::MatrixXi &bottom_faces, Eigen::VectorXi &bottom_indices, double y_coord) {
-    Eigen::RowVector3d point(0, y_coord, 0);
-    Eigen::RowVector3d normal_up(0, -1, 0);
-    Eigen::RowVector3d normal_down(0, 1, 0);
-
-
-    bool success_top = igl::copyleft::cgal::intersect_with_half_space(V, F, point, normal_up, top_vertices, top_faces, top_indices);
-    bool success_bottom = igl::copyleft::cgal::intersect_with_half_space(V, F, point, normal_down, bottom_vertices, bottom_faces, bottom_indices);
-
-    return success_top && success_bottom;
-}
 
 bool split_mesh_open(const Eigen::MatrixXd &V_in, const Eigen::MatrixXi &F_in,
                      Eigen::MatrixXd &top_V, Eigen::MatrixXi &top_F,
