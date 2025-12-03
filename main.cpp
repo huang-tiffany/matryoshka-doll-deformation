@@ -121,8 +121,7 @@ int main(int argc, char *argv[])
             viewer.data_list[0].show_faces = false;
 
             // Update mesh 1 - inner shell surface (with flipped faces)
-            viewer.data_list[1].set_vertices(V_outer_inner_shell);
-
+            viewer.data_list[1].set_mesh(V_outer_inner_shell, F_inner_flipped);  // ← CHANGED!
             viewer.data_list[1].show_faces = false;
 
         }
@@ -200,7 +199,7 @@ int main(int argc, char *argv[])
         bool outer_success = split_mesh_open(V_outer, F, outer_top_V, outer_top_F,
                                              outer_bottom_V, outer_bottom_F, cutting_plane_y_coord);
 
-        // Split inner shell surface with flipped normals (open cut)
+
         // Use the consistently flipped faces
         Eigen::MatrixXd inner_shell_top_V, inner_shell_bottom_V;
         Eigen::MatrixXi inner_shell_top_F, inner_shell_bottom_F;
@@ -242,6 +241,7 @@ int main(int argc, char *argv[])
         viewer.data_list[4].show_lines = true;
         viewer.data_list[4].set_colors(Eigen::RowVector3d(0.9, 0.7, 0.7));
         viewer.data_list[4].face_based = false;
+
 
         // Add bottom half of shell (outer surface) - index 5
         viewer.append_mesh();
