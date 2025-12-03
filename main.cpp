@@ -192,19 +192,50 @@ int main(int argc, char *argv[])
     auto visualize_shell_split = [&]() {
         if(V.size() == 0) return;
 
-        // Split outer shell surface (open cut)
+        // Permanently remove the plane mesh
+        if(plane_mesh_id != -1 && plane_mesh_id < viewer.data_list.size()) {
+            viewer.erase_mesh(plane_mesh_id);
+            plane_mesh_id = -1;
+        }
+
+        // Helper function to combine outer and inner shell surfaces
+        auto create_closed_shell_half = [](
+                                            const Eigen::MatrixXd& outer_V, const Eigen::MatrixXi& outer_F,
+                                            const Eigen::MatrixXd& inner_V, const Eigen::MatrixXi& inner_F,
+                                            Eigen::MatrixXd& shell_V, Eigen::MatrixXi& shell_F) {
+
+            // Combine outer and inner surfaces
+            int n_outer = outer_V.rows();
+            int n_inner = inner_V.rows();
+
+            shell_V.resize(n_outer + n_inner, 3);
+            shell_V.block(0, 0, n_outer, 3) = outer_V;
+            shell_V.block(n_outer, 0, n_inner, 3) = inner_V;
+
+            int n_outer_faces = outer_F.rows();
+            int n_inner_faces = inner_F.rows();
+
+            shell_F.resize(n_outer_faces + n_inner_faces, 3);
+            shell_F.block(0, 0, n_outer_faces, 3) = outer_F;
+
+            // Offset inner face indices
+            for(int i = 0; i < n_inner_faces; i++) {
+                shell_F.row(n_outer_faces + i) = inner_F.row(i).array() + n_outer;
+            }
+        };
+
+        // Split outer shell surface
         Eigen::MatrixXd outer_top_V, outer_bottom_V;
         Eigen::MatrixXi outer_top_F, outer_bottom_F;
 
         bool outer_success = split_mesh_open(V_outer, F, outer_top_V, outer_top_F,
                                              outer_bottom_V, outer_bottom_F, cutting_plane_y_coord);
 
-
-        // Use the consistently flipped faces
+        // Split inner shell surface with original F
         Eigen::MatrixXd inner_shell_top_V, inner_shell_bottom_V;
         Eigen::MatrixXi inner_shell_top_F, inner_shell_bottom_F;
 
-        bool inner_success = split_mesh_open(V_outer_inner_shell, F_inner_flipped,
+        bool inner_success = split_mesh_open(V_outer_inner_shell, F,
                                              inner_shell_top_V, inner_shell_top_F,
                                              inner_shell_bottom_V, inner_shell_bottom_F, cutting_plane_y_coord);
 
@@ -213,51 +244,48 @@ int main(int argc, char *argv[])
             return;
         }
 
+        // Flip normals AFTER splitting
+        inner_shell_top_F.col(1).swap(inner_shell_top_F.col(2));
+        inner_shell_bottom_F.col(1).swap(inner_shell_bottom_F.col(2));
+
+        // Create combined shell halves using the helper function
+        Eigen::MatrixXd top_shell_V, bottom_shell_V;
+        Eigen::MatrixXi top_shell_F, bottom_shell_F;
+
+        create_closed_shell_half(outer_top_V, outer_top_F,
+                                 inner_shell_top_V, inner_shell_top_F,
+                                 top_shell_V, top_shell_F);
+
+        create_closed_shell_half(outer_bottom_V, outer_bottom_F,
+                                 inner_shell_bottom_V, inner_shell_bottom_F,
+                                 bottom_shell_V, bottom_shell_F);
+
         // Apply translations to separate the halves
         Eigen::RowVector3d translationUp(0, 0.15, 0);
         Eigen::RowVector3d translationDown(0, -0.15, 0);
 
-        outer_top_V = outer_top_V.rowwise() + translationUp;
-        inner_shell_top_V = inner_shell_top_V.rowwise() + translationUp;
-        outer_bottom_V = outer_bottom_V.rowwise() + translationDown;
-        inner_shell_bottom_V = inner_shell_bottom_V.rowwise() + translationDown;
+        top_shell_V = top_shell_V.rowwise() + translationUp;
+        bottom_shell_V = bottom_shell_V.rowwise() + translationDown;
 
         // Hide meshes 0 and 1 (outer and inner shell surfaces)
         viewer.data_list[0].is_visible = false;
         viewer.data_list[1].is_visible = false;
 
-        // Add top half of shell (outer surface) - index 3
+        // Add combined top shell - index 3
         viewer.append_mesh();
-        viewer.data_list[3].set_mesh(outer_top_V, outer_top_F);
+        viewer.data_list[3].set_mesh(top_shell_V, top_shell_F);
         viewer.data_list[3].show_faces = true;
         viewer.data_list[3].show_lines = true;
         viewer.data_list[3].set_colors(Eigen::RowVector3d(0.7, 0.7, 0.9));
         viewer.data_list[3].face_based = false;
 
-        // Add top half of shell (inner surface - flipped normals) - index 4
+        // Add combined bottom shell - index 4
         viewer.append_mesh();
-        viewer.data_list[4].set_mesh(inner_shell_top_V, inner_shell_top_F);
+        viewer.data_list[4].set_mesh(bottom_shell_V, bottom_shell_F);
         viewer.data_list[4].show_faces = true;
         viewer.data_list[4].show_lines = true;
-        viewer.data_list[4].set_colors(Eigen::RowVector3d(0.9, 0.7, 0.7));
+        viewer.data_list[4].set_colors(Eigen::RowVector3d(0.7, 0.7, 0.9));
         viewer.data_list[4].face_based = false;
-
-
-        // Add bottom half of shell (outer surface) - index 5
-        viewer.append_mesh();
-        viewer.data_list[5].set_mesh(outer_bottom_V, outer_bottom_F);
-        viewer.data_list[5].show_faces = true;
-        viewer.data_list[5].show_lines = true;
-        viewer.data_list[5].set_colors(Eigen::RowVector3d(0.7, 0.7, 0.9));
-        viewer.data_list[5].face_based = false;
-
-        // Add bottom half of shell (inner surface - flipped normals) - index 6
-        viewer.append_mesh();
-        viewer.data_list[6].set_mesh(inner_shell_bottom_V, inner_shell_bottom_F);
-        viewer.data_list[6].show_faces = true;
-        viewer.data_list[6].show_lines = true;
-        viewer.data_list[6].set_colors(Eigen::RowVector3d(0.9, 0.7, 0.7));
-        viewer.data_list[6].face_based = false;
 
         // Nested mesh stays at index 2, update collision color
         bool intersects_outer = meshes_intersect(nested_mesh, F, V_outer, F);
@@ -272,7 +300,6 @@ int main(int argc, char *argv[])
         viewer.data_list[2].show_lines = true;
         viewer.data_list[2].face_based = false;
     };
-
     auto visualize_swept_volume = [&]() {
         if(V.size() == 0) return;
 
@@ -297,15 +324,21 @@ int main(int argc, char *argv[])
             return T;
         };
 
-        if (viewer.data_list.size() < 4) {
+        // Changed from 7 to 5 (need indices 0,1,2,3,4)
+        if (viewer.data_list.size() < 5) {
+            std::cerr << "Must visualize shell split first!" << std::endl;
             return;
         }
 
+        // Use index 3 (combined top shell)
         igl::swept_volume(
-            viewer.data_list[3].V,viewer.data_list[3].F,transform_top,time_steps,grid_size,isolevel,SV_top,SF_top);
+            viewer.data_list[3].V, viewer.data_list[3].F,
+            transform_top, time_steps, grid_size, isolevel, SV_top, SF_top);
 
+        // Use index 4 (combined bottom shell)
         igl::swept_volume(
-            viewer.data_list[5].V,viewer.data_list[5].F,transform_bottom,time_steps,grid_size,isolevel,SV_bottom,SF_bottom);
+            viewer.data_list[4].V, viewer.data_list[4].F,
+            transform_bottom, time_steps, grid_size, isolevel, SV_bottom, SF_bottom);
 
         Eigen::RowVector3d translationUp(0, 0.5, 0);
         Eigen::RowVector3d translationDown(0, -0.5, 0);
@@ -313,6 +346,7 @@ int main(int argc, char *argv[])
         SV_top = SV_top.rowwise() + translationUp;
         SV_bottom = SV_bottom.rowwise() + translationDown;
 
+        // Add swept volume meshes at indices 5 and 6
         viewer.append_mesh();
         viewer.data_list[viewer.data_list.size() - 1].set_mesh(SV_top, SF_top);
         viewer.data_list[viewer.data_list.size() - 1].show_faces = true;
@@ -325,7 +359,6 @@ int main(int argc, char *argv[])
         viewer.data_list[viewer.data_list.size() - 1].show_lines = true;
         viewer.data_list[viewer.data_list.size() - 1].set_colors(Eigen::RowVector3d(0.5, 0.8, 0.8));
     };
-
     auto load_mesh = [&](const std::string& filename) {
         bool success = false;
 
