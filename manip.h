@@ -4,6 +4,7 @@
 #include <igl/copyleft/cgal/intersect_other.h>
 #include <igl/per_vertex_normals.h>
 #include <igl/copyleft/cgal/mesh_boolean.h>
+#include <igl/swept_volume.h>
 
 Eigen::MatrixXd resize_mesh(Eigen::MatrixXd V, double scale);
 

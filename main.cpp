@@ -6,12 +6,15 @@
 #include <igl/readPLY.h>
 #include <imgui.h>
 #include "portable-file-dialogs.h"
+#include <igl/kelvinlets.h>
+#include <igl/unproject.h>
+#include <igl/unproject_onto_mesh.h>
 #include <iostream>
 #include "manip.h"
 
 int main(int argc, char *argv[])
 {
-    Eigen::MatrixXd V;
+    Eigen::MatrixXd V, V1;
     Eigen::MatrixXi F;
 
     Eigen::MatrixXd V_outer, V_outer_inner_shell, V_nested;
@@ -21,13 +24,28 @@ int main(int argc, char *argv[])
 
 
     float slider_value = 1.f;
-    float shell_thickness = 0.01f;
+    float shell_thickness = 0.001f;
     int n_nests = 1;
     int mesh_selection = 0;
     // inner mesh
     float translate_x = 0.0f;
     float translate_y = 0.0f;
     float translate_z = 0.0f;
+
+    const int grid_size = 75;
+    const int time_steps = 200;
+    const double isolevel = 0;
+
+    Eigen::Vector3d posStart(0, 0, 0);
+    Eigen::Vector3d posEnd;
+    auto brush_strength = 1.;
+    decltype(V) result;
+    Eigen::Matrix3d mat;
+    mat.setZero();
+
+    auto brushRadius = .1;
+    auto brushType = igl::BrushType::GRAB;
+    auto scale = .05;
 
     float cutting_plane_y_coord = 0.5f;
     Eigen::MatrixXd V_plane;
@@ -51,8 +69,8 @@ int main(int argc, char *argv[])
     };
     //update mesh_resized by add translation
     auto mesh_resized = [&]() {
-        if(V.size() == 0) return;
-        V_nested = resize_mesh(V, slider_value);
+        if(V1.size() == 0) return;
+        V_nested = resize_mesh(V1, slider_value);
 
         // Apply translation to inner mesh
         Eigen::RowVector3d translation(translate_x, translate_y, translate_z);
@@ -222,6 +240,65 @@ int main(int argc, char *argv[])
         }
     };
 
+    auto visualize_swept_volume = [&]() {
+        if(V.size() == 0) return;
+
+        Eigen::MatrixXd SV_top, SV_bottom;
+        Eigen::MatrixXi SF_top, SF_bottom;
+
+        const auto & transform_top = [](const double t)->Eigen::Affine3d
+        {
+            Eigen::Affine3d T = Eigen::Affine3d::Identity();
+            T.translate(Eigen::Vector3d(-0.5,0,0));
+            T.rotate(Eigen::AngleAxisd(t*0.5*igl::PI,Eigen::Vector3d(0,0,1)));
+            T.translate(Eigen::Vector3d(0.5,0,0));
+            return T;
+        };
+
+        const auto & transform_bottom = [](const double t)->Eigen::Affine3d
+        {
+            Eigen::Affine3d T = Eigen::Affine3d::Identity();
+            T.translate(Eigen::Vector3d(0.5,0,0));
+            T.rotate(Eigen::AngleAxisd(t*0.5*igl::PI,Eigen::Vector3d(0,0,1)));
+            T.translate(Eigen::Vector3d(-0.5,0,0));
+            return T;
+        };
+
+
+        if (viewer.data_list.size() < 4) {
+            return;
+        }
+
+        igl::swept_volume(
+            viewer.data_list[0].V,viewer.data_list[0].F,transform_top,time_steps,grid_size,isolevel,SV_top,SF_top);
+
+        igl::swept_volume(
+            viewer.data_list[2].V,viewer.data_list[2].F,transform_bottom,time_steps,grid_size,isolevel,SV_bottom,SF_bottom);
+
+
+        // clear_all_meshes();
+
+        Eigen::RowVector3d translationUp(0, 0.5, 0);
+        Eigen::RowVector3d translationDown(0, -0.5, 0);
+
+        SV_top = SV_top.rowwise() + translationUp;
+        SV_bottom = SV_bottom.rowwise() + translationDown;
+
+        viewer.append_mesh();
+        viewer.data_list[viewer.data_list.size() - 1].set_mesh(SV_top, SF_top);
+        viewer.data_list[viewer.data_list.size() - 1].show_faces = true;
+        viewer.data_list[viewer.data_list.size() - 1].show_lines = true;
+        viewer.data_list[viewer.data_list.size() - 1].set_colors(Eigen::RowVector3d(0.5, 0.8, 0.8));
+
+        viewer.append_mesh();
+        viewer.data_list[viewer.data_list.size() - 1].set_mesh(SV_bottom, SF_bottom);
+        viewer.data_list[viewer.data_list.size() - 1].show_faces = true;
+        viewer.data_list[viewer.data_list.size() - 1].show_lines = true;
+        viewer.data_list[viewer.data_list.size() - 1].set_colors(Eigen::RowVector3d(0.5, 0.8, 0.8));
+
+
+    };
+
     auto mesh_split = [&]() {
         Eigen::MatrixXd top_vertices;
         Eigen::MatrixXi top_faces;
@@ -281,11 +358,16 @@ int main(int argc, char *argv[])
         if (success) {
             translate_x = translate_y = translate_z = 0.0f;  // Reset translations
             stage_1();
+
+            V1 = V;
+            auto min_point = V1.colwise().minCoeff();
+            auto max_point = V1.colwise().maxCoeff();
+            // to multiply brush force proportional to size of mesh
+            brush_strength = (max_point - min_point).norm() * 2;
+            update_plane();
         } else {
             std::cerr << "Failed to load: " << filename << std::endl;
         }
-
-        update_plane();
 
         return success;
     };
@@ -314,7 +396,7 @@ int main(int argc, char *argv[])
             mesh_resized();
         }
 
-        if (ImGui::SliderFloat("Shell Thickness", &shell_thickness, 0.01f, 0.1f)) {
+        if (ImGui::SliderFloat("Shell Thickness", &shell_thickness, 0.001f, 0.1f)) {
             shell_changed();
         }
 
@@ -365,6 +447,11 @@ int main(int argc, char *argv[])
             visualize_shell_split();
         }
 
+        if (ImGui::Button("Visualize Swept Volume", ImVec2(-1, 0))) {
+            if(V.size() == 0) return;
+            visualize_swept_volume();
+        }
+
         if (ImGui::Button("Generate dolls...", ImVec2(-1, 0))) {
             if(V.size() == 0) return;
             // menu.callback_draw_viewer_menu = ui_2;
@@ -389,6 +476,144 @@ int main(int argc, char *argv[])
             menu.callback_draw_viewer_menu = ui_1;
             stage_1();
         }
+    };
+
+    viewer.callback_mouse_down =
+        [&](igl::opengl::glfw::Viewer& viewer, int, int) -> bool {
+        Eigen::Vector3f bc;
+        int fid;
+        auto x = viewer.current_mouse_x;
+        auto y =
+            viewer.core().viewport(3) - static_cast<float>(viewer.current_mouse_y);
+
+\
+        auto V_temp = V1;
+        if (V_nested.size() != 0) {
+            V_temp = V_nested;
+        }
+        if (igl::unproject_onto_mesh(Eigen::Vector2f(x, y),
+                                     viewer.core().view,
+                                     viewer.core().proj,
+                                     viewer.core().viewport,
+                                     V_temp,
+                                     F,
+                                     fid,
+                                     bc)) {
+            posStart = igl::unproject(Eigen::Vector3f(x, y, viewer.down_mouse_z),
+                                      viewer.core().view,
+                                      viewer.core().proj,
+                                      viewer.core().viewport)
+                           .template cast<double>();
+            return true;
+        }
+        return false;
+    };
+
+    // viewer.callback_mouse_move =
+    //     [&](igl::opengl::glfw::Viewer& viewer, int, int) -> bool {
+    //     if (!posStart.isZero() && !posStart.hasNaN()) {
+    //         Eigen::Vector3d oldPosEnd(posEnd.x(), posEnd.y(), posEnd.z());
+
+    //         posEnd = igl::unproject(
+    //                      Eigen::Vector3f(viewer.current_mouse_x,
+    //                                      viewer.core().viewport[3] -
+    //                                          static_cast<float>(viewer.current_mouse_y),
+    //                                      viewer.down_mouse_z),
+    //                      viewer.core().view,
+    //                      viewer.core().proj,
+    //                      viewer.core().viewport)
+    //                      .template cast<double>();
+
+    //         std::cout << "move" << std::endl;
+
+    //         // exaggerate the force by a little bit
+    //         Eigen::Vector3d forceVec = (posEnd - posStart) * brush_strength;
+
+    //         int scaleFactor = forceVec.norm();
+    //         if (posEnd.x() < posStart.x()) {
+    //             // probably not the best way to determine direction.
+    //             scaleFactor = -scaleFactor;
+    //         }
+
+    //         igl::kelvinlets(
+    //             V,
+    //             posStart,
+    //             forceVec,
+    //             mat,
+    //             igl::KelvinletParams<double>(brushRadius, scale, brushType),
+    //             result);
+
+
+    //         // viewer.data_list[0].set_vertices(result);
+
+
+    //         return true;
+    //     }
+    //     return false;
+    // };
+
+    viewer.callback_mouse_up =
+        [&](igl::opengl::glfw::Viewer& viewer, int, int) -> bool {
+        if (!posStart.isZero() && !posStart.hasNaN()) {
+            Eigen::Vector3d oldPosEnd(posEnd.x(), posEnd.y(), posEnd.z());
+
+            posEnd = igl::unproject(
+                         Eigen::Vector3f(viewer.current_mouse_x,
+                                         viewer.core().viewport[3] -
+                                             static_cast<float>(viewer.current_mouse_y),
+                                         viewer.down_mouse_z),
+                         viewer.core().view,
+                         viewer.core().proj,
+                         viewer.core().viewport)
+                         .template cast<double>();
+
+
+            // exaggerate the force by a little bit
+            Eigen::Vector3d forceVec = (posEnd - posStart) * brush_strength;
+
+            int scaleFactor = forceVec.norm();
+            if (posEnd.x() < posStart.x()) {
+                // probably not the best way to determine direction.
+                scaleFactor = -scaleFactor;
+            }
+
+            igl::kelvinlets(
+                V1,
+                posStart,
+                forceVec,
+                mat,
+                igl::KelvinletParams<double>(brushRadius, scale, brushType),
+                result);
+
+
+            // viewer.data_list[0].set_vertices(result);
+            viewer.data_list[1].set_vertices(result);
+            V1 = result;
+            posStart.setZero();
+
+            mesh_resized();
+
+            return true;
+        }
+
+        // if (!posStart.isZero()) {
+
+
+
+        //      std::cout << "up" << std::endl;
+
+        //     // clear_all_meshes();
+        //     // viewer.append_mesh();
+
+        //     // viewer.data_list[0].set_mesh(V, F);
+        //     // viewer.data_list[0].show_faces = true;
+        //     // viewer.data_list[0].show_lines = true;
+        //     // viewer.data_list[1].set_colors(Eigen::RowVector3d(0.8, 0.8, 0.9));
+
+        //     posStart.setZero();
+        //     return true;
+        // }
+        return false;
     };
 
 
