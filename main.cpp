@@ -6,12 +6,11 @@
 #include <igl/readPLY.h>
 #include <imgui.h>
 #include "portable-file-dialogs.h"
-#include <igl/harmonic.h>
 #include <igl/unproject.h>
 #include <igl/unproject_onto_mesh.h>
 #include <igl/swept_volume.h>
-#include <igl/boundary_loop.h>
 #include <iostream>
+#include <cmath>
 #include "manip.h"
 
 enum class AppMode {
@@ -45,14 +44,11 @@ int main(int argc, char *argv[])
     std::vector<Eigen::MatrixXd> V_dolls;
     std::vector<Eigen::MatrixXi> F_dolls;
 
-    // ============ BIHARMONIC DEFORMATION STATE ============
-    Eigen::VectorXi boundary_vertices;
-    bool is_dragging = false;
-    int selected_vertex = -1;
-    Eigen::Vector3d drag_start_pos;
-    float selection_radius = 0.05f;  // Radius for selecting vertices to drag
-    std::vector<int> handle_vertices;  // Vertices in the handle region
-    Eigen::MatrixXd handle_rest_positions;  // Rest positions of handle vertices
+    // ============ SCULPTING STATE ============
+    bool is_sculpting = false;
+    Eigen::Vector3d last_mouse_pos_3d;
+    float brush_radius = 0.1f;
+    float brush_strength = 0.5f;
 
     // ============ UI PARAMETERS ============
     float slider_value = 1.f;
@@ -95,77 +91,30 @@ int main(int argc, char *argv[])
         cutting_plane_y_coord = 0.5f;
     };
 
-    auto find_boundary_vertices = [&]() {
-        // Find boundary vertices to use as fixed constraints
-        std::vector<std::vector<int>> boundary_loops;
-        igl::boundary_loop(F, boundary_loops);
-
-        if(!boundary_loops.empty() && !boundary_loops[0].empty()) {
-            boundary_vertices.resize(boundary_loops[0].size());
-            for(int i = 0; i < boundary_loops[0].size(); i++) {
-                boundary_vertices(i) = boundary_loops[0][i];
-            }
-            std::cout << "Found " << boundary_vertices.size() << " boundary vertices" << std::endl;
-        } else {
-            // If no boundary, select a few vertices as fixed anchors
-            boundary_vertices.resize(4);
-            int n = V_working.rows();
-            boundary_vertices(0) = 0;
-            boundary_vertices(1) = n/4;
-            boundary_vertices(2) = n/2;
-            boundary_vertices(3) = 3*n/4;
-            std::cout << "No boundary found, using " << boundary_vertices.size() << " anchor vertices" << std::endl;
-        }
+    // Smooth falloff function (0 at edge, 1 at center)
+    auto smooth_falloff = [](double distance, double radius) -> double {
+        if(distance >= radius) return 0.0;
+        double t = distance / radius;
+        // Smooth cubic falloff
+        return (1.0 - t * t) * (1.0 - t * t);
     };
 
-    auto find_vertices_in_radius = [&](const Eigen::Vector3d& center, double radius) -> std::vector<int> {
-        std::vector<int> vertices;
+    // Clay-like sculpting: move vertices along drag direction with smooth falloff
+    auto apply_clay_sculpting = [&](const Eigen::Vector3d& center, const Eigen::Vector3d& displacement) {
         for(int i = 0; i < V_working.rows(); i++) {
-            if((V_working.row(i).transpose() - center).norm() < radius) {
-                vertices.push_back(i);
+            Eigen::Vector3d vertex_pos = V_working.row(i).transpose();
+            double distance = (vertex_pos - center).norm();
+
+            if(distance < brush_radius) {
+                double weight = smooth_falloff(distance, brush_radius);
+                Eigen::Vector3d scaled_displacement = displacement * weight * brush_strength;
+                V_working.row(i) += scaled_displacement.transpose();
             }
         }
-        return vertices;
-    };
 
-    auto apply_biharmonic_deformation = [&](const Eigen::Vector3d& target_pos) {
-        if(handle_vertices.empty()) return;
-
-        // Compute displacement for handle
-        Eigen::Vector3d displacement = target_pos - drag_start_pos;
-
-        // Prepare boundary conditions
-        // b contains indices of constrained vertices (boundary + handle)
-        // bc contains the DEFORMATION FIELD (displacement) for these vertices
-
-        int n_boundary = boundary_vertices.size();
-        int n_handle = handle_vertices.size();
-
-        Eigen::VectorXi b(n_boundary + n_handle);
-        Eigen::MatrixXd d_bc(n_boundary + n_handle, 3);
-
-        // Boundary vertices have zero displacement (stay fixed)
-        for(int i = 0; i < n_boundary; i++) {
-            b(i) = boundary_vertices(i);
-            d_bc.row(i) = Eigen::RowVector3d(0, 0, 0);
-        }
-
-        // Handle vertices have the computed displacement
-        for(int i = 0; i < n_handle; i++) {
-            b(n_boundary + i) = handle_vertices[i];
-            d_bc.row(n_boundary + i) = displacement.transpose();
-        }
-
-        // Solve for biharmonic deformation field
-        Eigen::MatrixXd d;
-        igl::harmonic(V_working, F, b, d_bc, 2, d);  // k=2 for biharmonic
-
-        // Apply deformation field to get new positions
-        Eigen::MatrixXd V_new = V_working + d;
-
-        // Update mesh
-        viewer.data_list[0].set_vertices(V_new);
-        V_working = V_new;
+        // Update visualization
+        viewer.data_list[0].set_vertices(V_working);
+        viewer.data_list[0].compute_normals();
     };
 
     auto update_nested_mesh = [&]() {
@@ -237,9 +186,7 @@ int main(int argc, char *argv[])
     auto setup_edit_mode = [&]() {
         clear_all_meshes();
         current_mode = AppMode::EDIT_DEFORMATION;
-        is_dragging = false;
-        selected_vertex = -1;
-        handle_vertices.clear();
+        is_sculpting = false;
 
         // Determine which mesh to edit
         if(start_from_original == 1) {
@@ -249,14 +196,11 @@ int main(int argc, char *argv[])
             V_working = (V_deformed.size() > 0) ? V_deformed : V_original;
         }
 
-        // Find boundary vertices for constraints
-        find_boundary_vertices();
-
         // Display single mesh for editing
         viewer.append_mesh();
         viewer.data_list[0].set_mesh(V_working, F);
         viewer.data_list[0].show_faces = true;
-        viewer.data_list[0].show_lines = true;
+        viewer.data_list[0].show_lines = false;
         viewer.data_list[0].set_colors(Eigen::RowVector3d(0.9, 0.9, 0.9));
     };
 
@@ -458,7 +402,7 @@ int main(int argc, char *argv[])
             auto min_point = V_original.colwise().minCoeff();
             auto max_point = V_original.colwise().maxCoeff();
             auto bbox_size = (max_point - min_point).norm();
-            selection_radius = bbox_size * 0.05f;  // 5% of bbox size
+            brush_radius = bbox_size * 0.1f;  // 10% of bbox size
 
             setup_edit_mode();
         } else {
@@ -474,7 +418,7 @@ int main(int argc, char *argv[])
 
     ui_edit_mode = [&]() {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.2f, 1.0f));
-        ImGui::Text("=== EDIT DEFORMATION MODE ===");
+        ImGui::Text("=== CLAY SCULPTING MODE ===");
         ImGui::PopStyleColor();
         ImGui::Spacing();
 
@@ -503,20 +447,25 @@ int main(int argc, char *argv[])
         ImGui::Separator();
         ImGui::Spacing();
 
-        if (ImGui::SliderFloat("Selection Radius", &selection_radius, 0.01f, 0.5f)) {
-            // Radius updated for next selection
+        ImGui::Text("Brush Settings:");
+        if (ImGui::SliderFloat("Brush Radius", &brush_radius, 0.01f, 0.5f)) {
+            // Radius updated
+        }
+
+        if (ImGui::SliderFloat("Brush Strength", &brush_strength, 0.1f, 2.0f)) {
+            // Strength updated
         }
 
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
 
-        ImGui::TextWrapped("Biharmonic Deformation Instructions:");
-        ImGui::BulletText("Click and drag on the mesh surface");
-        ImGui::BulletText("Vertices within radius will be handles");
-        ImGui::BulletText("Smooth, detail-preserving deformation");
-        ImGui::BulletText("Boundary vertices stay fixed");
-        ImGui::BulletText("Adjust 'Selection Radius' for area size");
+        ImGui::TextWrapped("Clay Sculpting Instructions:");
+        ImGui::BulletText("Click and drag to sculpt like clay");
+        ImGui::BulletText("Smooth falloff from brush center");
+        ImGui::BulletText("Real-time interactive deformation");
+        ImGui::BulletText("Adjust radius for larger/smaller brush");
+        ImGui::BulletText("Adjust strength for subtle/strong effect");
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -626,10 +575,10 @@ int main(int argc, char *argv[])
         }
     };
 
-    // ============ MOUSE CALLBACKS FOR BIHARMONIC DEFORMATION ============
+    // ============ MOUSE CALLBACKS FOR CLAY SCULPTING ============
 
     viewer.callback_mouse_down = [&](igl::opengl::glfw::Viewer& viewer, int, int) -> bool {
-        // Only allow deformation in EDIT mode
+        // Only allow sculpting in EDIT mode
         if(current_mode != AppMode::EDIT_DEFORMATION) return false;
 
         Eigen::Vector3f bc_hit;
@@ -646,26 +595,20 @@ int main(int argc, char *argv[])
                                      fid,
                                      bc_hit)) {
             // Get the 3D position of the click
-            drag_start_pos = igl::unproject(Eigen::Vector3f(x, y, viewer.down_mouse_z),
-                                            viewer.core().view,
-                                            viewer.core().proj,
-                                            viewer.core().viewport)
-                                 .template cast<double>();
+            last_mouse_pos_3d = igl::unproject(Eigen::Vector3f(x, y, viewer.down_mouse_z),
+                                               viewer.core().view,
+                                               viewer.core().proj,
+                                               viewer.core().viewport)
+                                    .template cast<double>();
 
-            // Find all vertices within selection radius
-            handle_vertices = find_vertices_in_radius(drag_start_pos, selection_radius);
-
-            if(!handle_vertices.empty()) {
-                is_dragging = true;
-                std::cout << "Selected " << handle_vertices.size() << " handle vertices" << std::endl;
-                return true;
-            }
+            is_sculpting = true;
+            return true;
         }
         return false;
     };
 
     viewer.callback_mouse_move = [&](igl::opengl::glfw::Viewer& viewer, int, int) -> bool {
-        if(current_mode != AppMode::EDIT_DEFORMATION || !is_dragging) return false;
+        if(current_mode != AppMode::EDIT_DEFORMATION || !is_sculpting) return false;
 
         // Get current mouse position in 3D
         Eigen::Vector3d current_pos = igl::unproject(
@@ -677,8 +620,14 @@ int main(int argc, char *argv[])
                                           viewer.core().viewport)
                                           .template cast<double>();
 
-        // Apply biharmonic deformation
-        apply_biharmonic_deformation(current_pos);
+        // Compute displacement since last frame
+        Eigen::Vector3d displacement = current_pos - last_mouse_pos_3d;
+
+        // Apply clay sculpting with smooth falloff
+        apply_clay_sculpting(current_pos, displacement);
+
+        // Update last position
+        last_mouse_pos_3d = current_pos;
 
         return true;
     };
@@ -686,10 +635,9 @@ int main(int argc, char *argv[])
     viewer.callback_mouse_up = [&](igl::opengl::glfw::Viewer& viewer, int, int) -> bool {
         if(current_mode != AppMode::EDIT_DEFORMATION) return false;
 
-        if (is_dragging) {
-            is_dragging = false;
-            handle_vertices.clear();
-            std::cout << "Deformation complete" << std::endl;
+        if (is_sculpting) {
+            is_sculpting = false;
+            std::cout << "Sculpting stroke complete" << std::endl;
             return true;
         }
 
