@@ -18,6 +18,17 @@ enum class AppMode {
     NESTED_DOLL_DESIGN     // User is customizing nested dolls
 };
 
+// Mesh indices in viewer.data_list
+const int MESH_WORKING = 0;      // The mesh being edited/displayed in edit mode
+const int MESH_OUTER_SHELL = 1;  // Outer shell in nested doll mode
+const int MESH_INNER_SHELL = 2;  // Inner shell in nested doll mode
+const int MESH_NESTED = 3;       // Nested doll mesh
+const int MESH_PLANE = 4;        // Cutting plane
+const int MESH_TOP_HALF = 5;     // Top half of split shell
+const int MESH_BOTTOM_HALF = 6;  // Bottom half of split shell
+const int MESH_SWEPT_TOP = 7;    // Swept volume top
+const int MESH_SWEPT_BOTTOM = 8; // Swept volume bottom
+
 int main(int argc, char *argv[])
 {
     // ============ STATE MANAGEMENT ============
@@ -54,6 +65,7 @@ int main(int argc, char *argv[])
     float slider_value = 1.f;
     float shell_thickness = 0.001f;
     int n_nests = 1;
+    bool show_mesh_lines = true;  // Toggle for mesh wireframe
 
     // Inner mesh translation
     float translate_x = 0.0f;
@@ -70,9 +82,6 @@ int main(int argc, char *argv[])
 
     // ============ CUTTING PLANE PARAMETERS ============
     float cutting_plane_y_coord = 0.5f;
-    Eigen::MatrixXd V_plane;
-    Eigen::MatrixXi F_plane;
-    int plane_mesh_id = -1;
     double plane_size = 2.0;
 
     // ============ VIEWER SETUP ============
@@ -84,11 +93,24 @@ int main(int argc, char *argv[])
 
     // ============ HELPER FUNCTIONS ============
 
-    auto clear_all_meshes = [&]() {
-        while(viewer.erase_mesh(viewer.selected_data_index)){};
-        viewer.data().clear();
-        plane_mesh_id = -1;
-        cutting_plane_y_coord = 0.5f;
+    auto clear_meshes_from = [&](int start_index) {
+        // Delete all meshes from start_index onwards
+        while(viewer.data_list.size() > start_index) {
+            viewer.erase_mesh(viewer.data_list.size() - 1);
+        }
+    };
+
+    auto ensure_mesh_exists = [&](int index) {
+        // Create meshes up to the desired index if they don't exist
+        while(viewer.data_list.size() <= index) {
+            viewer.append_mesh();
+        }
+    };
+
+    auto hide_all_meshes = [&]() {
+        for(size_t i = 0; i < viewer.data_list.size(); i++) {
+            viewer.data_list[i].is_visible = false;
+        }
     };
 
     // Smooth falloff function (0 at edge, 1 at center)
@@ -113,8 +135,8 @@ int main(int argc, char *argv[])
         }
 
         // Update visualization
-        viewer.data_list[0].set_vertices(V_working);
-        viewer.data_list[0].compute_normals();
+        viewer.data_list[MESH_WORKING].set_vertices(V_working);
+        viewer.data_list[MESH_WORKING].compute_normals();
     };
 
     auto update_nested_mesh = [&]() {
@@ -124,17 +146,16 @@ int main(int argc, char *argv[])
         Eigen::RowVector3d translation(translate_x, translate_y, translate_z);
         nested_mesh = nested_mesh.rowwise() + translation;
 
-        if(viewer.data_list.size() >= 3) {
-            viewer.data_list[2].set_vertices(nested_mesh);
+        ensure_mesh_exists(MESH_NESTED);
+        viewer.data_list[MESH_NESTED].set_vertices(nested_mesh);
 
-            bool intersects_outer = meshes_intersect(nested_mesh, F, V_outer, F);
-            bool intersects_inner = meshes_intersect(nested_mesh, F, V_outer_inner_shell, F_inner_flipped);
+        bool intersects_outer = meshes_intersect(nested_mesh, F, V_outer, F);
+        bool intersects_inner = meshes_intersect(nested_mesh, F, V_outer_inner_shell, F_inner_flipped);
 
-            if(intersects_outer || intersects_inner) {
-                viewer.data_list[2].set_colors(Eigen::RowVector3d(1.0, 0.0, 0.0));
-            } else {
-                viewer.data_list[2].set_colors(Eigen::RowVector3d(0.0, 1.0, 0.0));
-            }
+        if(intersects_outer || intersects_inner) {
+            viewer.data_list[MESH_NESTED].set_colors(Eigen::RowVector3d(1.0, 0.0, 0.0));
+        } else {
+            viewer.data_list[MESH_NESTED].set_colors(Eigen::RowVector3d(0.0, 1.0, 0.0));
         }
     };
 
@@ -147,19 +168,22 @@ int main(int argc, char *argv[])
         F_inner_flipped = F;
         F_inner_flipped.col(1).swap(F_inner_flipped.col(2));
 
-        if(viewer.data_list.size() >= 3) {
-            viewer.data_list[0].set_vertices(V_outer);
-            viewer.data_list[0].show_faces = false;
+        ensure_mesh_exists(MESH_INNER_SHELL);
 
-            viewer.data_list[1].set_mesh(V_outer_inner_shell, F_inner_flipped);
-            viewer.data_list[1].show_faces = false;
-        }
+        viewer.data_list[MESH_OUTER_SHELL].set_vertices(V_outer);
+        viewer.data_list[MESH_OUTER_SHELL].show_faces = false;
+
+        viewer.data_list[MESH_INNER_SHELL].set_mesh(V_outer_inner_shell, F_inner_flipped);
+        viewer.data_list[MESH_INNER_SHELL].show_faces = false;
     };
 
     auto update_plane = [&]() {
         Eigen::RowVector3d p0(0.0, cutting_plane_y_coord, 0.0);
         Eigen::RowVector3d u(1.0, 0.0, 0.0);
         Eigen::RowVector3d v(0.0, 0.0, 1.0);
+
+        Eigen::MatrixXd V_plane;
+        Eigen::MatrixXi F_plane;
 
         V_plane.resize(4,3);
         V_plane.row(0) = p0 + plane_size*u + plane_size*v;
@@ -170,23 +194,28 @@ int main(int argc, char *argv[])
         F_plane.resize(2,3);
         F_plane << 0,1,2, 0,2,3;
 
-        if(plane_mesh_id == -1){
-            viewer.append_mesh();
-            plane_mesh_id = viewer.data_list.size()-1;
-            viewer.data_list[plane_mesh_id].set_colors(Eigen::RowVector3d(0.5,0.5,1.0));
-            viewer.data_list[plane_mesh_id].show_faces = true;
-            viewer.data_list[plane_mesh_id].show_lines = true;
-        }
-
-        viewer.data_list[plane_mesh_id].set_mesh(V_plane, F_plane);
+        ensure_mesh_exists(MESH_PLANE);
+        viewer.data_list[MESH_PLANE].set_mesh(V_plane, F_plane);
+        viewer.data_list[MESH_PLANE].set_colors(Eigen::RowVector3d(0.5,0.5,1.0));
+        viewer.data_list[MESH_PLANE].show_faces = true;
+        viewer.data_list[MESH_PLANE].show_lines = true;
+        viewer.data_list[MESH_PLANE].is_visible = true;
     };
 
     // ============ MODE SETUP FUNCTIONS ============
 
     auto setup_edit_mode = [&]() {
-        clear_all_meshes();
         current_mode = AppMode::EDIT_DEFORMATION;
         is_sculpting = false;
+
+        // Delete all meshes beyond the working mesh
+        clear_meshes_from(MESH_OUTER_SHELL);
+
+        // Ensure working mesh exists
+        ensure_mesh_exists(MESH_WORKING);
+
+        // Hide all meshes first
+        hide_all_meshes();
 
         // Determine which mesh to edit
         if(start_from_original == 1) {
@@ -197,11 +226,12 @@ int main(int argc, char *argv[])
         }
 
         // Display single mesh for editing
-        viewer.append_mesh();
-        viewer.data_list[0].set_mesh(V_working, F);
-        viewer.data_list[0].show_faces = true;
-        viewer.data_list[0].show_lines = false;
-        viewer.data_list[0].set_colors(Eigen::RowVector3d(0.9, 0.9, 0.9));
+        viewer.data_list[MESH_WORKING].clear();
+        viewer.data_list[MESH_WORKING].set_mesh(V_working, F);
+        viewer.data_list[MESH_WORKING].show_faces = true;
+        viewer.data_list[MESH_WORKING].show_lines = show_mesh_lines;
+        viewer.data_list[MESH_WORKING].set_colors(Eigen::RowVector3d(0.9, 0.9, 0.9));
+        viewer.data_list[MESH_WORKING].is_visible = true;
     };
 
     auto apply_deformation = [&]() {
@@ -211,23 +241,38 @@ int main(int argc, char *argv[])
     };
 
     auto setup_nested_doll_mode = [&]() {
-        clear_all_meshes();
         current_mode = AppMode::NESTED_DOLL_DESIGN;
+
+        // Delete meshes from MESH_PLANE onwards (keep outer, inner, nested shells)
+        clear_meshes_from(MESH_PLANE);
 
         // Use the deformed mesh as base (or original if no deformation)
         V_base = (V_deformed.size() > 0) ? V_deformed : V_original;
 
-        // Reset translation
+        // Reset translation and cutting plane
         translate_x = translate_y = translate_z = 0.0f;
+        cutting_plane_y_coord = 0.5f;
 
-        // Create 3 meshes: outer shell, inner shell, nested mesh
-        viewer.append_mesh();
-        viewer.append_mesh();
-        viewer.append_mesh();
+        // Ensure we have all needed meshes
+        ensure_mesh_exists(MESH_NESTED);
 
-        viewer.data_list[0].set_mesh(V_base, F);
-        viewer.data_list[1].set_mesh(V_base, F);
-        viewer.data_list[2].set_mesh(V_base, F);
+        // Hide all meshes first
+        hide_all_meshes();
+
+        // Set up the three main meshes
+        viewer.data_list[MESH_OUTER_SHELL].set_mesh(V_base, F);
+        viewer.data_list[MESH_OUTER_SHELL].is_visible = true;
+
+        viewer.data_list[MESH_INNER_SHELL].set_mesh(V_base, F);
+        viewer.data_list[MESH_INNER_SHELL].is_visible = true;
+
+        viewer.data_list[MESH_NESTED].set_mesh(V_base, F);
+        viewer.data_list[MESH_NESTED].is_visible = true;
+
+        // Apply wireframe setting to all visible meshes
+        viewer.data_list[MESH_OUTER_SHELL].show_lines = show_mesh_lines;
+        viewer.data_list[MESH_INNER_SHELL].show_lines = show_mesh_lines;
+        viewer.data_list[MESH_NESTED].show_lines = show_mesh_lines;
 
         shell_changed();
         update_nested_mesh();
@@ -237,9 +282,12 @@ int main(int argc, char *argv[])
     auto visualize_shell_split = [&]() {
         if(V_base.size() == 0) return;
 
-        if(plane_mesh_id != -1 && plane_mesh_id < viewer.data_list.size()) {
-            viewer.erase_mesh(plane_mesh_id);
-            plane_mesh_id = -1;
+        // Delete plane and anything after top/bottom halves
+        clear_meshes_from(MESH_TOP_HALF);
+
+        // Hide the plane
+        if(viewer.data_list.size() > MESH_PLANE) {
+            viewer.data_list[MESH_PLANE].is_visible = false;
         }
 
         auto create_closed_shell_half = [](
@@ -301,34 +349,38 @@ int main(int argc, char *argv[])
         top_shell_V = top_shell_V.rowwise() + translationUp;
         bottom_shell_V = bottom_shell_V.rowwise() + translationDown;
 
-        viewer.data_list[0].is_visible = false;
-        viewer.data_list[1].is_visible = false;
+        // Hide outer and inner shells
+        viewer.data_list[MESH_OUTER_SHELL].is_visible = false;
+        viewer.data_list[MESH_INNER_SHELL].is_visible = false;
 
-        viewer.append_mesh();
-        viewer.data_list[3].set_mesh(top_shell_V, top_shell_F);
-        viewer.data_list[3].show_faces = true;
-        viewer.data_list[3].show_lines = true;
-        viewer.data_list[3].set_colors(Eigen::RowVector3d(0.7, 0.7, 0.9));
-        viewer.data_list[3].face_based = false;
+        // Create split shell meshes
+        ensure_mesh_exists(MESH_BOTTOM_HALF);
 
-        viewer.append_mesh();
-        viewer.data_list[4].set_mesh(bottom_shell_V, bottom_shell_F);
-        viewer.data_list[4].show_faces = true;
-        viewer.data_list[4].show_lines = true;
-        viewer.data_list[4].set_colors(Eigen::RowVector3d(0.7, 0.7, 0.9));
-        viewer.data_list[4].face_based = false;
+        viewer.data_list[MESH_TOP_HALF].set_mesh(top_shell_V, top_shell_F);
+        viewer.data_list[MESH_TOP_HALF].show_faces = true;
+        viewer.data_list[MESH_TOP_HALF].show_lines = show_mesh_lines;
+        viewer.data_list[MESH_TOP_HALF].set_colors(Eigen::RowVector3d(0.7, 0.7, 0.9));
+        viewer.data_list[MESH_TOP_HALF].face_based = false;
+        viewer.data_list[MESH_TOP_HALF].is_visible = true;
+
+        viewer.data_list[MESH_BOTTOM_HALF].set_mesh(bottom_shell_V, bottom_shell_F);
+        viewer.data_list[MESH_BOTTOM_HALF].show_faces = true;
+        viewer.data_list[MESH_BOTTOM_HALF].show_lines = show_mesh_lines;
+        viewer.data_list[MESH_BOTTOM_HALF].set_colors(Eigen::RowVector3d(0.7, 0.7, 0.9));
+        viewer.data_list[MESH_BOTTOM_HALF].face_based = false;
+        viewer.data_list[MESH_BOTTOM_HALF].is_visible = true;
 
         bool intersects_outer = meshes_intersect(nested_mesh, F, V_outer, F);
         bool intersects_inner = meshes_intersect(nested_mesh, F, V_outer_inner_shell, F_inner_flipped);
 
         if(intersects_outer || intersects_inner) {
-            viewer.data_list[2].set_colors(Eigen::RowVector3d(1.0, 0.0, 0.0));
+            viewer.data_list[MESH_NESTED].set_colors(Eigen::RowVector3d(1.0, 0.0, 0.0));
         } else {
-            viewer.data_list[2].set_colors(Eigen::RowVector3d(0.0, 1.0, 0.0));
+            viewer.data_list[MESH_NESTED].set_colors(Eigen::RowVector3d(0.0, 1.0, 0.0));
         }
 
-        viewer.data_list[2].show_lines = true;
-        viewer.data_list[2].face_based = false;
+        viewer.data_list[MESH_NESTED].show_lines = show_mesh_lines;
+        viewer.data_list[MESH_NESTED].face_based = false;
     };
 
     auto visualize_swept_volume = [&]() {
@@ -353,15 +405,15 @@ int main(int argc, char *argv[])
             return T;
         };
 
-        if (viewer.data_list.size() < 5) {
+        if (viewer.data_list.size() < MESH_BOTTOM_HALF + 1) {
             std::cerr << "Must visualize shell split first!" << std::endl;
             return;
         }
 
-        igl::swept_volume(viewer.data_list[3].V, viewer.data_list[3].F,
+        igl::swept_volume(viewer.data_list[MESH_TOP_HALF].V, viewer.data_list[MESH_TOP_HALF].F,
                           transform_top, time_steps, grid_size, isolevel, SV_top, SF_top);
 
-        igl::swept_volume(viewer.data_list[4].V, viewer.data_list[4].F,
+        igl::swept_volume(viewer.data_list[MESH_BOTTOM_HALF].V, viewer.data_list[MESH_BOTTOM_HALF].F,
                           transform_bottom, time_steps, grid_size, isolevel, SV_bottom, SF_bottom);
 
         Eigen::RowVector3d translationUp(0, 0.5, 0);
@@ -370,17 +422,19 @@ int main(int argc, char *argv[])
         SV_top = SV_top.rowwise() + translationUp;
         SV_bottom = SV_bottom.rowwise() + translationDown;
 
-        viewer.append_mesh();
-        viewer.data_list[viewer.data_list.size() - 1].set_mesh(SV_top, SF_top);
-        viewer.data_list[viewer.data_list.size() - 1].show_faces = true;
-        viewer.data_list[viewer.data_list.size() - 1].show_lines = true;
-        viewer.data_list[viewer.data_list.size() - 1].set_colors(Eigen::RowVector3d(0.5, 0.8, 0.8));
+        ensure_mesh_exists(MESH_SWEPT_BOTTOM);
 
-        viewer.append_mesh();
-        viewer.data_list[viewer.data_list.size() - 1].set_mesh(SV_bottom, SF_bottom);
-        viewer.data_list[viewer.data_list.size() - 1].show_faces = true;
-        viewer.data_list[viewer.data_list.size() - 1].show_lines = true;
-        viewer.data_list[viewer.data_list.size() - 1].set_colors(Eigen::RowVector3d(0.5, 0.8, 0.8));
+        viewer.data_list[MESH_SWEPT_TOP].set_mesh(SV_top, SF_top);
+        viewer.data_list[MESH_SWEPT_TOP].show_faces = true;
+        viewer.data_list[MESH_SWEPT_TOP].show_lines = show_mesh_lines;
+        viewer.data_list[MESH_SWEPT_TOP].set_colors(Eigen::RowVector3d(0.5, 0.8, 0.8));
+        viewer.data_list[MESH_SWEPT_TOP].is_visible = true;
+
+        viewer.data_list[MESH_SWEPT_BOTTOM].set_mesh(SV_bottom, SF_bottom);
+        viewer.data_list[MESH_SWEPT_BOTTOM].show_faces = true;
+        viewer.data_list[MESH_SWEPT_BOTTOM].show_lines = show_mesh_lines;
+        viewer.data_list[MESH_SWEPT_BOTTOM].set_colors(Eigen::RowVector3d(0.5, 0.8, 0.8));
+        viewer.data_list[MESH_SWEPT_BOTTOM].is_visible = true;
     };
 
     auto load_mesh = [&](const std::string& filename) {
@@ -420,6 +474,16 @@ int main(int argc, char *argv[])
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.2f, 1.0f));
         ImGui::Text("=== CLAY SCULPTING MODE ===");
         ImGui::PopStyleColor();
+        ImGui::Spacing();
+
+        // Wireframe toggle
+        if (ImGui::Checkbox("Show Wireframe", &show_mesh_lines)) {
+            if(viewer.data_list.size() > MESH_WORKING) {
+                viewer.data_list[MESH_WORKING].show_lines = show_mesh_lines;
+            }
+        }
+        ImGui::Spacing();
+        ImGui::Separator();
         ImGui::Spacing();
 
         if (ImGui::Button("Load mesh...", ImVec2(-1, 0))) {
@@ -484,7 +548,21 @@ int main(int argc, char *argv[])
         ImGui::PopStyleColor();
         ImGui::Spacing();
 
+        // Wireframe toggle
+        if (ImGui::Checkbox("Show Wireframe", &show_mesh_lines)) {
+            // Apply to all visible meshes
+            for(size_t i = 0; i < viewer.data_list.size(); i++) {
+                if(viewer.data_list[i].is_visible) {
+                    viewer.data_list[i].show_lines = show_mesh_lines;
+                }
+            }
+        }
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
         if (ImGui::Button("Return to Edit Deformation", ImVec2(-1, 0))) {
+            start_from_original = 0;  // Set to "Start from last edited version"
             setup_edit_mode();
             menu.callback_draw_viewer_menu = ui_edit_mode;
             return;
@@ -493,7 +571,7 @@ int main(int argc, char *argv[])
         ImGui::Spacing();
 
         if (ImGui::Button("Reset to Original Mesh", ImVec2(-1, 0))) {
-            // Clear all deformations and customizations
+            // Clear the deformed mesh - revert to original
             V_deformed.resize(0, 0);
             V_working = V_original;
             translate_x = translate_y = translate_z = 0.0f;
@@ -501,7 +579,8 @@ int main(int argc, char *argv[])
             shell_thickness = 0.001f;
             cutting_plane_y_coord = 0.5f;
 
-            // Return to edit mode with original mesh
+            // Set to start from original and go to edit mode
+            start_from_original = 1;
             setup_edit_mode();
             menu.callback_draw_viewer_menu = ui_edit_mode;
 
@@ -642,6 +721,7 @@ int main(int argc, char *argv[])
 
         return true;
     };
+
     viewer.callback_mouse_up = [&](igl::opengl::glfw::Viewer& viewer, int, int) -> bool {
         if(current_mode != AppMode::EDIT_DEFORMATION) return false;
 
