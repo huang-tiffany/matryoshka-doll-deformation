@@ -594,13 +594,13 @@ int main(int argc, char *argv[])
                                      F,
                                      fid,
                                      bc_hit)) {
-            // Get the 3D position of the click
-            last_mouse_pos_3d = igl::unproject(Eigen::Vector3f(x, y, viewer.down_mouse_z),
-                                               viewer.core().view,
-                                               viewer.core().proj,
-                                               viewer.core().viewport)
-                                    .template cast<double>();
+            // Compute the actual 3D hit position on the mesh
+            Eigen::RowVector3d hit_pos =
+                V_working.row(F(fid, 0)) * bc_hit(0) +
+                V_working.row(F(fid, 1)) * bc_hit(1) +
+                V_working.row(F(fid, 2)) * bc_hit(2);
 
+            last_mouse_pos_3d = hit_pos.transpose();
             is_sculpting = true;
             return true;
         }
@@ -610,28 +610,38 @@ int main(int argc, char *argv[])
     viewer.callback_mouse_move = [&](igl::opengl::glfw::Viewer& viewer, int, int) -> bool {
         if(current_mode != AppMode::EDIT_DEFORMATION || !is_sculpting) return false;
 
-        // Get current mouse position in 3D
-        Eigen::Vector3d current_pos = igl::unproject(
-                                          Eigen::Vector3f(viewer.current_mouse_x,
-                                                          viewer.core().viewport[3] - static_cast<float>(viewer.current_mouse_y),
-                                                          viewer.down_mouse_z),
-                                          viewer.core().view,
-                                          viewer.core().proj,
-                                          viewer.core().viewport)
-                                          .template cast<double>();
+        // Find the closest point on the mesh to the current mouse ray
+        Eigen::Vector3f bc_hit;
+        int fid;
+        auto x = viewer.current_mouse_x;
+        auto y = viewer.core().viewport(3) - static_cast<float>(viewer.current_mouse_y);
 
-        // Compute displacement since last frame
-        Eigen::Vector3d displacement = current_pos - last_mouse_pos_3d;
+        if (igl::unproject_onto_mesh(Eigen::Vector2f(x, y),
+                                     viewer.core().view,
+                                     viewer.core().proj,
+                                     viewer.core().viewport,
+                                     V_working,
+                                     F,
+                                     fid,
+                                     bc_hit)) {
+            // Compute the actual 3D hit position on the mesh
+            Eigen::RowVector3d current_pos =
+                V_working.row(F(fid, 0)) * bc_hit(0) +
+                V_working.row(F(fid, 1)) * bc_hit(1) +
+                V_working.row(F(fid, 2)) * bc_hit(2);
 
-        // Apply clay sculpting with smooth falloff
-        apply_clay_sculpting(current_pos, displacement);
+            // Compute displacement since last frame
+            Eigen::Vector3d displacement = current_pos.transpose() - last_mouse_pos_3d;
 
-        // Update last position
-        last_mouse_pos_3d = current_pos;
+            // Apply clay sculpting with smooth falloff
+            apply_clay_sculpting(current_pos.transpose(), displacement);
+
+            // Update last position
+            last_mouse_pos_3d = current_pos.transpose();
+        }
 
         return true;
     };
-
     viewer.callback_mouse_up = [&](igl::opengl::glfw::Viewer& viewer, int, int) -> bool {
         if(current_mode != AppMode::EDIT_DEFORMATION) return false;
 
